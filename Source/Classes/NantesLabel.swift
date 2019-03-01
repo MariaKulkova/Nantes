@@ -13,6 +13,7 @@ public protocol NantesLabelDelegate: class {
     func attributedLabel(_ label: NantesLabel, didSelectPhoneNumber phoneNumber: String)
     func attributedLabel(_ label: NantesLabel, didSelectTextCheckingResult result: NSTextCheckingResult)
     func attributedLabel(_ label: NantesLabel, didSelectTransitInfo transitInfo: [NSTextCheckingKey: String])
+    func attributedLabel(_ label: NantesLabel, didSelectActiveElement element: ActiveElement, text: String)
 }
 
 public extension NantesLabelDelegate {
@@ -22,6 +23,7 @@ public extension NantesLabelDelegate {
     func attributedLabel(_ label: NantesLabel, didSelectPhoneNumber phoneNumber: String) { }
     func attributedLabel(_ label: NantesLabel, didSelectTextCheckingResult result: NSTextCheckingResult) { }
     func attributedLabel(_ label: NantesLabel, didSelectTransitInfo transitInfo: [NSTextCheckingKey: String]) { }
+    func attributedLabel(_ label: NantesLabel, didSelectActiveElement element: ActiveElement, text: String) { }
 }
 
 private class NantesLabelAccessibilityElement: UIAccessibilityElement {
@@ -56,6 +58,27 @@ public extension NSAttributedString.Key {
     public static let nantesLabelBackgroundLineWidth: NSAttributedString.Key = .init("NantesLabelBackgroundLineWidthAttribute")
     public static let nantesLabelBackgroundStrokeColor: NSAttributedString.Key = .init("NantesLabelBackgroundStrokeColorAttribute")
     public static let nantesLabelStrikeOut: NSAttributedString.Key = .init("NantesLabelStrikeOutAttribute")
+}
+
+public enum ActiveElement {
+    case hashtag
+    case mention
+    case custom(regex: String)
+}
+
+private extension ActiveElement {
+    var regexPattern: String {
+        switch self {
+        case .hashtag:
+            return "(?:^|\\s|$)#[\\p{L}0-9_]*"
+            
+        case .mention:
+            return "(?<=^|\\s|$|\\W)@[\\p{L}0-9_]([.]?[\\p{L}0-9_])*"
+            
+        case .custom(regex: let pattern):
+            return pattern
+        }
+    }
 }
 
 @IBDesignable open class NantesLabel: UILabel {
@@ -107,6 +130,15 @@ public extension NSAttributedString.Key {
     /// Handling for touch events after touchesEnded
     /// Warning: Will not be called if `labelTappedBlock` is supplied
     open weak var delegate: NantesLabelDelegate?
+    
+    /// A list of active elements that are enabled for the label. The label will automatically highlight elements when `text` or `attributedText` is set if this value is supplied before they're set.
+    open var enabledActiveElements: [ActiveElement] = [] {
+        didSet {
+            regexDetectors = enabledActiveElements.compactMap {
+                try? NSRegularExpression(pattern: $0.regexPattern, options: [.caseInsensitive])
+            }
+        }
+    }
 
     /// A list of text checking types that are enabled for the label. The label will automatically highlight elements when `text` or `attributedText` is set if this value is supplied before they're set.
     open var enabledTextCheckingTypes: NSTextCheckingResult.CheckingType = [] {
@@ -237,6 +269,8 @@ public extension NSAttributedString.Key {
     }
 
     private var dataDetector: NSDataDetector?
+    
+    private var regexDetectors: [NSRegularExpression] = []
 
     private var flushFactor: CGFloat {
         switch textAlignment {
@@ -703,7 +737,18 @@ public extension NSAttributedString.Key {
                 return
             }
 
-            let results = dataDetector.matches(in: attributedText.string, options: .withTransparentBounds, range: NSRange(location: 0, length: attributedText.length))
+            let fulltextLength = NSRange(location: 0, length: attributedText.length)
+            let results = dataDetector.matches(in: attributedText.string,
+                                               options: .withTransparentBounds,
+                                               range: fulltextLength)
+            
+            let regexResults = self.regexDetectors.flatMap {
+                $0.matches(in: attributedText.string,
+                           options: .withTransparentBounds,
+                           range: fulltextLength)
+            }
+            results.append(contentsOf: regexResults)
+
             guard !results.isEmpty else {
                 return
             }
@@ -1064,6 +1109,14 @@ public extension NSAttributedString.Key {
             if let transitInfo = result.components {
                 delegate.attributedLabel(self, didSelectTransitInfo: transitInfo)
             }
+            
+        case .regularExpression:
+            guard let regex = result.regularExpression, let text = link.text else {
+                break
+            }
+            
+            delegate.attributedLabel(self, didSelectActiveElement: activeElement(byPattern: regex.pattern), text: text)
+            
         default: // fallback to result if we aren't sure
             delegate.attributedLabel(self, didSelectTextCheckingResult: result)
         }
@@ -1156,6 +1209,19 @@ public extension NSAttributedString.Key {
         }
 
         return (position: position, type: truncationType)
+    }
+    
+    private func activeElement(byPattern pattern: String) -> ActiveElement {
+        switch pattern {
+        case ActiveElement.hashtag.regexPattern:
+            return .hashtag
+            
+        case ActiveElement.mention.regexPattern:
+            return .mention
+            
+        default:
+            return .custom(regex: pattern)
+        }
     }
 
     // MARK: - Accessibility
