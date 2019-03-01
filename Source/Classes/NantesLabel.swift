@@ -60,7 +60,11 @@ public extension NSAttributedString.Key {
     public static let nantesLabelStrikeOut: NSAttributedString.Key = .init("NantesLabelStrikeOutAttribute")
 }
 
-public enum ActiveElement {
+public enum ActiveElement: CaseIterable {
+    public static var allCases: [ActiveElement] {
+        return [.hashtag, .mention]
+    }
+    
     case hashtag
     case mention
     case custom(regex: String)
@@ -1115,7 +1119,9 @@ private extension ActiveElement {
                 break
             }
             
-            delegate.attributedLabel(self, didSelectActiveElement: activeElement(byPattern: regex.pattern), text: text)
+            let pattern = regex.pattern
+            let element: ActiveElement = ActiveElement.allCases.first{ $0.regexPattern == pattern } ?? .custom(regex: pattern)
+            delegate.attributedLabel(self, didSelectActiveElement: element, text: text)
             
         default: // fallback to result if we aren't sure
             delegate.attributedLabel(self, didSelectTextCheckingResult: result)
@@ -1209,19 +1215,6 @@ private extension ActiveElement {
         }
 
         return (position: position, type: truncationType)
-    }
-    
-    private func activeElement(byPattern pattern: String) -> ActiveElement {
-        switch pattern {
-        case ActiveElement.hashtag.regexPattern:
-            return .hashtag
-            
-        case ActiveElement.mention.regexPattern:
-            return .mention
-            
-        default:
-            return .custom(regex: pattern)
-        }
     }
 
     // MARK: - Accessibility
